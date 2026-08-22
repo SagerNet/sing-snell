@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	snell "github.com/sagernet/sing-snell"
 	"github.com/sagernet/sing-snell/internal/reuse"
@@ -57,7 +58,7 @@ func (s *Service) NewConnection(ctx context.Context, conn net.Conn, source M.Soc
 
 type MultiService[U comparable] struct {
 	*Service
-	users map[string]U
+	users atomic.Pointer[map[string]U]
 }
 
 var errInvalidUDPTunnelRequest = E.New("snell: invalid udp tunnel request")
@@ -67,7 +68,7 @@ func NewMultiService[U comparable](options ServerOptions) (*MultiService[U], err
 	if err != nil {
 		return nil, err
 	}
-	return &MultiService[U]{Service: service, users: make(map[string]U)}, nil
+	return &MultiService[U]{Service: service}, nil
 }
 
 func (s *MultiService[U]) UpdateUsers(users []U, userKeys [][]byte) error {
@@ -92,7 +93,7 @@ func (s *MultiService[U]) UpdateUsers(users []U, userKeys [][]byte) error {
 		}
 		userMap[keyString] = user
 	}
-	s.users = userMap
+	s.users.Store(&userMap)
 	return nil
 }
 
@@ -105,11 +106,12 @@ func (s *MultiService[U]) NewConnection(ctx context.Context, conn net.Conn, sour
 }
 
 func (s *MultiService[U]) authenticate(ctx context.Context, request snell.Request) (context.Context, error) {
-	user, loaded := s.users[string(request.ClientID)]
-	if !loaded {
-		return nil, snell.ErrBadUserKey
+	if userMap := s.users.Load(); userMap != nil {
+		if user, loaded := (*userMap)[string(request.ClientID)]; loaded {
+			return auth.ContextWithUser(ctx, user), nil
+		}
 	}
-	return auth.ContextWithUser(ctx, user), nil
+	return nil, snell.ErrBadUserKey
 }
 
 func (s *Service) readRequest(record *buf.Buffer) (snell.Request, error) {
