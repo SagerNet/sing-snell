@@ -57,7 +57,6 @@ func (c *Client) reuseSession(ctx context.Context) (*reuseSession, error) {
 		return nil, E.New("snell: missing dialer")
 	}
 	if found {
-		session.generation = c.generation.Load()
 		return session, nil
 	}
 	conn, err := c.dialer.DialContext(ctx, N.NetworkTCP, c.server)
@@ -69,7 +68,6 @@ func (c *Client) reuseSession(ctx context.Context) (*reuseSession, error) {
 		return nil, net.ErrClosed
 	}
 	session = c.newReuseSession(conn)
-	session.generation = c.generation.Load()
 	session.state.Store(uint32(reuse.StateActive))
 	return session, nil
 }
@@ -80,9 +78,9 @@ func (c *Client) Reset() {
 	}
 }
 
-func (c *Client) CloseIdleConnections() {
-	c.generation.Add(1)
-	if c.reuse {
+func (c *Client) SetKeepIdleConnections(keep bool) {
+	c.closeIdle.Store(!keep)
+	if !keep && c.reuse {
 		c.pool.Reset()
 	}
 }
@@ -95,10 +93,9 @@ type reuseSession struct {
 	net.Conn
 	client *Client
 
-	state      atomic.Uint32
-	generation uint64
-	reader     *reader
-	writer     *writer
+	state  atomic.Uint32
+	reader *reader
+	writer *writer
 }
 
 func (c *Client) newReuseSession(conn net.Conn) *reuseSession {
@@ -122,11 +119,7 @@ func (s *reuseSession) DialConn(destination M.Socksaddr) (net.Conn, error) {
 }
 
 func (s *reuseSession) Release(reusable bool) {
-	if !reusable {
-		s.Close()
-		return
-	}
-	if s.generation != s.client.generation.Load() {
+	if !reusable || s.client.closeIdle.Load() {
 		s.Close()
 		return
 	}
@@ -147,7 +140,7 @@ func (s *reuseSession) Close() error {
 }
 
 func (s *reuseSession) startDrain() {
-	if s.generation != s.client.generation.Load() {
+	if s.client.closeIdle.Load() {
 		s.Close()
 		return
 	}
@@ -463,6 +456,10 @@ func (c *reuseConn) Close() error {
 		c.session.Conn.SetWriteDeadline(time.Time{})
 		if c.readClosed.Load() {
 			c.session.Release(true)
+			return
+		}
+		if c.session.client.closeIdle.Load() {
+			c.session.Close()
 			return
 		}
 		// Surge 6.7.0 (11520): SNConnectorV4::readServerEOFIfNotInReadState: starts waiting-state EOF
