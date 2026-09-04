@@ -85,7 +85,14 @@ func (w *shapedWriter) makeBufferRecord(buffer *buf.Buffer) *buf.Buffer {
 		saltPrefixLen = saltBlockLen - saltLen
 	}
 	paddingLen := w.profile.paddingLen(w.seq, dataLen, prefixLen, saltPrefixLen, saltBlockLen)
+	payloadCipherLen := 0
+	if dataLen > 0 {
+		payloadCipherLen = dataLen + snell.AEADTagLen
+	}
 	frontLen := saltBlockLen + prefixLen + snell.HeaderCipherLen + paddingLen
+	if buffer.Start() < frontLen || buffer.FreeLen() < payloadCipherLen-dataLen {
+		return w.makeSliceRecord(buffer.Bytes())
+	}
 	front := buffer.ExtendHeader(frontLen)
 	if saltBlockLen > 0 {
 		block := front[:saltBlockLen]
@@ -186,8 +193,11 @@ func (w *shapedWriter) WriteBuffer(buffer *buf.Buffer) error {
 	now := time.Now()
 	payloadLimit := w.payloadLimitFor(now)
 	if dataLen <= payloadLimit {
-		w.makeBufferRecord(buffer)
-		_, err := w.upstream.Write(buffer.Bytes())
+		record := w.makeBufferRecord(buffer)
+		_, err := w.upstream.Write(record.Bytes())
+		if record != buffer {
+			record.Release()
+		}
 		return err
 	}
 	var records []*buf.Buffer
@@ -222,6 +232,9 @@ func (w *shapedWriter) WritePacketBuffer(buffer *buf.Buffer) error {
 	// current stream chunk limit.
 	w.payloadLimitFor(time.Now())
 	record := w.makeBufferRecord(buffer)
+	if record != buffer {
+		buffer.Release()
+	}
 	_, err := w.upstream.Write(record.Bytes())
 	record.Release()
 	return err
@@ -273,7 +286,9 @@ func (w *vectorisedShapedWriter) WriteVectorised(buffers []*buf.Buffer) error {
 			recordLen := min(len(data), payloadLimit)
 			if len(data) == dataLen && dataLen <= payloadLimit {
 				record := recordWriter.makeBufferRecord(buffer)
-				buffer = nil
+				if record == buffer {
+					buffer = nil
+				}
 				records = append(records, record)
 				break
 			}
@@ -322,6 +337,9 @@ func (w *packetVectorisedShapedWriter) WriteVectorised(buffers []*buf.Buffer) er
 		}
 		recordWriter.payloadLimitFor(time.Now())
 		record := recordWriter.makeBufferRecord(buffer)
+		if record != buffer {
+			buffer.Release()
+		}
 		records = append(records, record)
 	}
 	if len(records) == 0 {
