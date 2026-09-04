@@ -81,3 +81,14 @@ func (e *ServerError) Unwrap() error {
 func (e *ServerError) Error() string {
 	return "snell: serve " + e.Source.String() + ": " + e.Cause.Error()
 }
+
+type keepSessionKey struct{}
+
+func ContextWithKeepSession(ctx context.Context) context.Context {
+	return context.WithValue(ctx, (*keepSessionKey)(nil), true)
+}
+
+func KeepSessionFromContext(ctx context.Context) bool {
+	keep, _ := ctx.Value((*keepSessionKey)(nil)).(bool)
+	return keep
+}

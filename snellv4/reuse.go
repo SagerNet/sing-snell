@@ -25,6 +25,9 @@ func (c *Client) DialContext(ctx context.Context, destination M.Socksaddr) (net.
 		if err != nil {
 			return nil, err
 		}
+		if snell.KeepSessionFromContext(ctx) {
+			session.keepOnce.Store(true)
+		}
 		conn, err := session.DialConn(destination)
 		if err != nil {
 			session.Close()
@@ -78,6 +81,19 @@ func (c *Client) Reset() {
 	}
 }
 
+func (c *Client) SetKeepIdleConnections(keep bool) {
+	c.closeIdle.Store(!keep)
+	if !keep {
+		c.CloseIdleConnections()
+	}
+}
+
+func (c *Client) CloseIdleConnections() {
+	if c.reuse {
+		c.pool.Reset()
+	}
+}
+
 func (c *Client) Close() error {
 	return c.pool.Close()
 }
@@ -86,9 +102,10 @@ type reuseSession struct {
 	net.Conn
 	client *Client
 
-	state  atomic.Uint32
-	reader *reader
-	writer *writer
+	state    atomic.Uint32
+	keepOnce atomic.Bool
+	reader   *reader
+	writer   *writer
 }
 
 func (c *Client) newReuseSession(conn net.Conn) *reuseSession {
@@ -111,8 +128,12 @@ func (s *reuseSession) DialConn(destination M.Socksaddr) (net.Conn, error) {
 	return &reuseConn{Conn: s.Conn, session: s, destination: destination}, nil
 }
 
+func (s *reuseSession) closeIdle() bool {
+	return s.client.closeIdle.Load() && !s.keepOnce.Swap(false)
+}
+
 func (s *reuseSession) Release(reusable bool) {
-	if !reusable {
+	if !reusable || s.closeIdle() {
 		s.Close()
 		return
 	}
@@ -133,6 +154,10 @@ func (s *reuseSession) Close() error {
 }
 
 func (s *reuseSession) startDrain() {
+	if s.closeIdle() {
+		s.Close()
+		return
+	}
 	if !s.state.CompareAndSwap(uint32(reuse.StateActive), uint32(reuse.StateWaiting)) {
 		if reuse.State(s.state.Load()) != reuse.StateClosed {
 			s.Close()
@@ -445,6 +470,10 @@ func (c *reuseConn) Close() error {
 		c.session.Conn.SetWriteDeadline(time.Time{})
 		if c.readClosed.Load() {
 			c.session.Release(true)
+			return
+		}
+		if c.session.closeIdle() {
+			c.session.Close()
 			return
 		}
 		// Surge 6.7.0 (11520): SNConnectorV4::readServerEOFIfNotInReadState: starts waiting-state EOF

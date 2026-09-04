@@ -3,6 +3,7 @@ package snellv4
 import (
 	"net"
 	"sync"
+	"sync/atomic"
 
 	snell "github.com/sagernet/sing-snell"
 	"github.com/sagernet/sing-snell/internal/reuse"
@@ -22,7 +23,8 @@ type Client struct {
 	dialer  N.Dialer
 	server  M.Socksaddr
 
-	pool reuse.Pool[*reuseSession]
+	pool      reuse.Pool[*reuseSession]
+	closeIdle atomic.Bool
 }
 
 type ClientOptions struct {
