@@ -1,6 +1,7 @@
 package test
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"context"
@@ -30,9 +31,16 @@ const baseImage = "debian:bookworm-slim"
 type binarySpec struct {
 	tag    string
 	sha256 string
+	// image pins a container image that snell-server is extracted from, for
+	// releases no longer published on dl.nssurge.com.
+	image string
 }
 
 var binaries = map[string]binarySpec{
+	// geekdada/snell-server 2.0.6 and 3.0.1 unpack the official
+	// github.com/surge-networks/snell release archives into /usr/bin.
+	"v2": {tag: "v2.0.6", sha256: "21442de081e415377c8bb61730aa027bac15c6c4fd8a97a867afeb9238903b8c", image: "geekdada/snell-server@sha256:8481ad94f297f7155e8b0496781b9971729e13380c70433abac8c261e98954bd"},
+	"v3": {tag: "v3.0.1", sha256: "11ebbd5f8cd2f5f88071e2bf080df1d65014129afa3044ae4793f7f77b741f25", image: "geekdada/snell-server@sha256:d7368c7d145b370255827c8f22a5ebc4a649b56426c6c36a9914a1bca0d409f0"},
 	"v4": {tag: "v4.1.1", sha256: "8e02974916645aafc0521c49faf0ab9916a0a8a7922ae7261cfd74b96899d25a"},
 	"v5": {tag: "v5.0.1", sha256: "5b2e221f2c6e29b1db8e47053e1221be29d5627da807cb932b089f514a3609f0"},
 	"v6": {tag: "v6.0.0rc", sha256: "02fa15ac1e18cde6a3e072eeb5d15328c7fd759dbefb1e77e33891a71a1202ae"},
@@ -63,6 +71,11 @@ func snellBinary(t *testing.T, version string) string {
 	}
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 
+	if spec.image != "" {
+		extractImageBinary(t, spec.image, binaryPath)
+		verifyBinary(t, binaryPath, spec.sha256)
+		return dir
+	}
 	url := "https://dl.nssurge.com/snell/snell-server-" + spec.tag + "-linux-amd64.zip"
 	t.Logf("downloading %s", url)
 	archive := downloadFile(t, url)
@@ -85,6 +98,34 @@ func snellBinary(t *testing.T, version string) string {
 	require.True(t, extracted, "snell-server not found in archive")
 	verifyBinary(t, binaryPath, spec.sha256)
 	return dir
+}
+
+func extractImageBinary(t *testing.T, ref string, binaryPath string) {
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	require.NoError(t, err)
+	defer dockerClient.Close()
+	ensureImage(t, dockerClient, ref)
+
+	ctx := context.Background()
+	platform := &ocispec.Platform{OS: "linux", Architecture: "amd64"}
+	created, err := dockerClient.ContainerCreate(ctx, &container.Config{Image: ref}, nil, nil, platform, "")
+	require.NoError(t, err)
+	defer dockerClient.ContainerRemove(context.Background(), created.ID, container.RemoveOptions{Force: true})
+	archive, _, err := dockerClient.CopyFromContainer(ctx, created.ID, "/usr/bin/snell-server")
+	require.NoError(t, err)
+	defer archive.Close()
+	tarReader := tar.NewReader(archive)
+	for {
+		header, nextErr := tarReader.Next()
+		require.NoError(t, nextErr, "snell-server not found in %s", ref)
+		if header.Typeflag != tar.TypeReg || filepath.Base(header.Name) != "snell-server" {
+			continue
+		}
+		content, readErr := io.ReadAll(tarReader)
+		require.NoError(t, readErr)
+		require.NoError(t, os.WriteFile(binaryPath, content, 0o755))
+		return
+	}
 }
 
 func checkBinary(path string, want string) bool {

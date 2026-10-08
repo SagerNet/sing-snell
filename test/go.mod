@@ -8,6 +8,7 @@ require (
 	github.com/sagernet/sing v0.8.12-0.20260727003324-d096a164bc7f
 	github.com/sagernet/sing-snell v0.0.0
 	github.com/stretchr/testify v1.11.1
+	golang.org/x/crypto v0.42.0
 )
 
 replace github.com/sagernet/sing-snell => ../
@@ -38,7 +39,6 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.44.0 // indirect
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
-	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
