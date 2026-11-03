@@ -104,7 +104,7 @@ func (s *serverReuseSession[U]) Serve(ctx context.Context, source M.Socksaddr, o
 			s.Conn.Close()
 			return requestCtx.Err()
 		}
-		err = serverConn.CloseWrite()
+		err = serverConn.Close()
 		if err != nil {
 			s.Conn.Close()
 			return err
@@ -159,17 +159,16 @@ type serverReuseConn[U comparable] struct {
 	net.Conn
 	session *serverReuseSession[U]
 
-	access         sync.Mutex
-	closeWriteOnce sync.Once
-	closeWriteErr  error
-	closeOnce      sync.Once
-	closeErr       error
-	readClosed     atomic.Bool
-	aborted        atomic.Bool
-	replyWritten   bool
-	writeClosed    bool
-	completeOnce   sync.Once
-	completion     chan struct{}
+	access        sync.Mutex
+	closeWriteErr error
+	closeOnce     sync.Once
+	closeErr      error
+	readClosed    atomic.Bool
+	aborted       atomic.Bool
+	replyWritten  bool
+	writeClosed   bool
+	completeOnce  sync.Once
+	completion    chan struct{}
 }
 
 func (c *serverReuseConn[U]) writeFirstResponse(payload []byte) error {
@@ -383,22 +382,27 @@ func (w *serverReuseVectorisedWriter[U]) WriteVectorised(buffers []*buf.Buffer) 
 }
 
 func (c *serverReuseConn[U]) CloseWrite() error {
-	c.closeWriteOnce.Do(func() {
-		c.access.Lock()
-		defer c.access.Unlock()
-		c.writeClosed = true
-		// snell-server v5.0.1: FUN_0013f020 reports upstream EOF before any
-		// payload as ReplyError 0x65 "Remote EOF", then aborts the reusable tunnel.
-		if !c.replyWritten {
-			c.closeWriteErr = c.writeErrorResponse(remoteEOFCode, remoteEOFMessage)
-			if c.closeWriteErr == nil {
-				c.aborted.Store(true)
-				c.closeWriteErr = c.session.Conn.Close()
-			}
-			return
+	c.access.Lock()
+	defer c.access.Unlock()
+	return c.closeWriteLocked()
+}
+
+func (c *serverReuseConn[U]) closeWriteLocked() error {
+	if c.writeClosed {
+		return c.closeWriteErr
+	}
+	c.writeClosed = true
+	// snell-server v5.0.1: FUN_0013f020 reports upstream EOF before any
+	// payload as ReplyError 0x65 "Remote EOF", then aborts the reusable tunnel.
+	if !c.replyWritten {
+		c.closeWriteErr = c.writeErrorResponse(remoteEOFCode, remoteEOFMessage)
+		if c.closeWriteErr == nil {
+			c.aborted.Store(true)
+			c.closeWriteErr = c.session.Conn.Close()
 		}
-		c.closeWriteErr = c.session.writer.WriteZeroChunk()
-	})
+		return c.closeWriteErr
+	}
+	c.closeWriteErr = c.session.writer.WriteZeroChunk()
 	return c.closeWriteErr
 }
 
@@ -406,7 +410,13 @@ func (c *serverReuseConn[U]) Close() error {
 	c.closeOnce.Do(func() {
 		// The handler may close this side while its peer copy is still reading.
 		// onClose owns completion and runs only after both copy directions exit.
-		c.closeErr = c.CloseWrite()
+		if !c.access.TryLock() {
+			c.aborted.Store(true)
+			c.closeErr = c.session.Conn.Close()
+			return
+		}
+		c.closeErr = c.closeWriteLocked()
+		c.access.Unlock()
 	})
 	return c.closeErr
 }
