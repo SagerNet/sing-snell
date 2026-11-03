@@ -537,23 +537,11 @@ func (w *writer) fillPaddingWithBitCount(padding []byte, oneBits int) error {
 }
 
 func (w *writer) Write(p []byte) (n int, err error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	w.access.Lock()
 	defer w.access.Unlock()
-	if len(p) == 0 {
-		err = w.initialize()
-		if err != nil {
-			return 0, err
-		}
-		nowUnix := time.Now().Unix()
-		payloadLimit := w.payloadLimitFor(nowUnix)
-		if payloadLimit <= 0 || payloadLimit > maxPayload {
-			panic("snell: invalid v4 payload limit")
-		}
-		// Surge 6.7.0 (11520): FUN_100012944 advances the growth window before
-		// calling FUN_100012b24 even when encrypting a zero-length EOF record.
-		w.advancePayloadLimit(payloadLimit, nowUnix)
-		return 0, w.writeSliceRecordLocked(nil, 0)
-	}
 	return w.writeBytesLocked(p)
 }
 
