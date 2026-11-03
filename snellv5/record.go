@@ -669,12 +669,6 @@ type packetVectorisedWriter struct {
 }
 
 func (w *packetVectorisedWriter) WriteVectorised(buffers []*buf.Buffer) error {
-	for _, buffer := range buffers {
-		if buffer.Len() > maxPayload {
-			buf.ReleaseMulti(buffers)
-			return snell.ErrPayloadTooLarge
-		}
-	}
 	var records []*buf.Buffer
 	defer func() {
 		buf.ReleaseMulti(records)
@@ -682,9 +676,15 @@ func (w *packetVectorisedWriter) WriteVectorised(buffers []*buf.Buffer) error {
 	recordWriter := w.writer
 	recordWriter.access.Lock()
 	defer recordWriter.access.Unlock()
+	var messageTooLongErr error
 	for index, buffer := range buffers {
 		if buffer.IsEmpty() {
 			buffer.Release()
+			continue
+		}
+		if buffer.Len() > maxPayload {
+			buffer.Release()
+			messageTooLongErr = snell.ErrPayloadTooLarge
 			continue
 		}
 		recordWriter.nextPayloadLimit()
@@ -697,11 +697,15 @@ func (w *packetVectorisedWriter) WriteVectorised(buffers []*buf.Buffer) error {
 		records = append(records, record)
 	}
 	if len(records) == 0 {
-		return nil
+		return messageTooLongErr
 	}
 	flushRecords := records
 	records = nil
-	return w.upstream.WriteVectorised(flushRecords)
+	err := w.upstream.WriteVectorised(flushRecords)
+	if err != nil {
+		return err
+	}
+	return messageTooLongErr
 }
 
 func (w *writer) FrontHeadroom() int {

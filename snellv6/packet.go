@@ -103,10 +103,6 @@ func (c *clientPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksad
 		buffer.Release()
 		return err
 	}
-	if buffer.Len() > maxPayload {
-		buffer.Release()
-		return snell.ErrPayloadTooLarge
-	}
 	return c.writer.WritePacketBuffer(buffer)
 }
 
@@ -306,10 +302,6 @@ func (c *serverPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksad
 	c.writeAccess.Unlock()
 	header := buf.With(buffer.ExtendHeader(c.responseAddrLen(destination)))
 	common.Must(snell.WriteUDPResponseAddress(header, destination))
-	if buffer.Len() > maxPayload {
-		buffer.Release()
-		return snell.ErrPayloadTooLarge
-	}
 	return writer.WritePacketBuffer(buffer)
 }
 
