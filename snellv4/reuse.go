@@ -202,7 +202,7 @@ type reuseConn struct {
 
 	access          sync.Mutex
 	writer          *writer
-	closeWriteOnce  sync.Once
+	writeClosed     bool
 	closeWriteErr   error
 	closeOnce       sync.Once
 	closeErr        error
@@ -370,15 +370,14 @@ func (c *reuseConn) writeRequestBuffer(buffer *buf.Buffer) error {
 }
 
 func (c *reuseConn) Write(p []byte) (int, error) {
-	if c.writer != nil {
-		return c.writer.Write(p)
-	}
 	c.access.Lock()
+	defer c.access.Unlock()
+	if c.writeClosed {
+		return 0, net.ErrClosed
+	}
 	if c.writer != nil {
-		c.access.Unlock()
 		return c.writer.Write(p)
 	}
-	defer c.access.Unlock()
 	err := c.writeRequest(p)
 	if err != nil {
 		return 0, err
@@ -387,15 +386,15 @@ func (c *reuseConn) Write(p []byte) (int, error) {
 }
 
 func (c *reuseConn) WriteBuffer(buffer *buf.Buffer) error {
-	if c.writer != nil {
-		return c.writer.WriteBuffer(buffer)
-	}
 	c.access.Lock()
+	defer c.access.Unlock()
+	if c.writeClosed {
+		buffer.Release()
+		return net.ErrClosed
+	}
 	if c.writer != nil {
-		c.access.Unlock()
 		return c.writer.WriteBuffer(buffer)
 	}
-	defer c.access.Unlock()
 	return c.writeRequestBuffer(buffer)
 }
 
@@ -414,11 +413,12 @@ type reuseVectorisedWriter struct {
 
 func (w *reuseVectorisedWriter) WriteVectorised(buffers []*buf.Buffer) error {
 	conn := w.conn
-	if conn.writer != nil {
-		return conn.writer.CreateVectorisedWriterFor(w.upstream).WriteVectorised(buffers)
-	}
 	conn.access.Lock()
 	defer conn.access.Unlock()
+	if conn.writeClosed {
+		buf.ReleaseMulti(buffers)
+		return net.ErrClosed
+	}
 	if conn.writer != nil {
 		return conn.writer.CreateVectorisedWriterFor(w.upstream).WriteVectorised(buffers)
 	}
@@ -441,28 +441,35 @@ func (w *reuseVectorisedWriter) WriteVectorised(buffers []*buf.Buffer) error {
 }
 
 func (c *reuseConn) CloseWrite() error {
-	c.closeWriteOnce.Do(func() {
-		c.access.Lock()
-		defer c.access.Unlock()
-		if c.writer == nil {
-			c.closeWriteErr = c.writeRequest(nil)
-			if c.closeWriteErr != nil {
-				return
-			}
+	c.access.Lock()
+	defer c.access.Unlock()
+	return c.closeWriteLocked()
+}
+
+func (c *reuseConn) closeWriteLocked() error {
+	if c.writeClosed {
+		return c.closeWriteErr
+	}
+	c.writeClosed = true
+	if c.writer == nil {
+		c.closeWriteErr = c.writeRequest(nil)
+		if c.closeWriteErr != nil {
+			return c.closeWriteErr
 		}
-		c.closeWriteErr = c.writer.WriteZeroChunk()
-	})
+	}
+	c.closeWriteErr = c.writer.WriteZeroChunk()
 	return c.closeWriteErr
 }
 
 func (c *reuseConn) Close() error {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
-		if !c.replyRead.Load() {
+		if !c.replyRead.Load() || !c.access.TryLock() {
 			c.session.Release(false)
 			return
 		}
-		c.closeErr = c.CloseWrite()
+		c.closeErr = c.closeWriteLocked()
+		c.access.Unlock()
 		if c.closeErr != nil {
 			c.session.Release(false)
 			return
