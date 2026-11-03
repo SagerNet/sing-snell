@@ -19,10 +19,7 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
-const (
-	maxUDPResponseHeaderLen = 1 + 16 + 2
-	minUDPPayloadLimit      = framePayloadStep
-)
+const maxUDPResponseHeaderLen = 1 + 16 + 2
 
 type serverPacketConn struct {
 	net.Conn
@@ -149,10 +146,6 @@ func (c *serverPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksad
 	c.writeAccess.Unlock()
 	header := buf.With(buffer.ExtendHeader(c.responseAddrLen(destination)))
 	common.Must(snell.WriteUDPResponseAddress(header, destination))
-	if buffer.Len() > maxPayload {
-		buffer.Release()
-		return snell.ErrPayloadTooLarge
-	}
 	return recordWriter.WritePacketBuffer(buffer)
 }
 
@@ -253,7 +246,7 @@ func (c *serverPacketConn) RearHeadroom() int {
 }
 
 func (c *serverPacketConn) WriterMTU() int {
-	return minUDPPayloadLimit - maxUDPResponseHeaderLen
+	return maxPayload - maxUDPResponseHeaderLen
 }
 
 func (c *serverPacketConn) Upstream() any {

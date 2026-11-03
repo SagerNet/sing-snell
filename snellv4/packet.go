@@ -16,10 +16,7 @@ import (
 	N "github.com/sagernet/sing/common/network"
 )
 
-const (
-	maxUDPRequestHeaderLen = 1 + 1 + 255 + 2
-	minUDPPayloadLimit     = frameSize - resetRecordOverhead
-)
+const maxUDPRequestHeaderLen = 1 + 1 + 255 + 2
 
 type clientPacketConn struct {
 	net.Conn
@@ -109,10 +106,6 @@ func (c *clientPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksad
 	if err != nil {
 		buffer.Release()
 		return err
-	}
-	if buffer.Len() > maxPayload {
-		buffer.Release()
-		return snell.ErrPayloadTooLarge
 	}
 	return c.writer.WritePacketBuffer(buffer)
 }
@@ -216,7 +209,7 @@ func (c *clientPacketConn) RearHeadroom() int {
 }
 
 func (c *clientPacketConn) WriterMTU() int {
-	return minUDPPayloadLimit - maxUDPRequestHeaderLen
+	return maxPayload - maxUDPRequestHeaderLen
 }
 
 func (c *clientPacketConn) Upstream() any {
