@@ -857,11 +857,17 @@ func (c *serverReuseConn[U]) writeErrorResponse() error {
 }
 
 func (c *serverReuseConn[U]) Read(p []byte) (int, error) {
+	if c.readClosed.Load() {
+		return 0, io.EOF
+	}
 	n, err := c.session.reader.Read(p)
 	return n, c.readError(err)
 }
 
 func (c *serverReuseConn[U]) ReadBuffer(buffer *buf.Buffer) error {
+	if c.readClosed.Load() {
+		return io.EOF
+	}
 	return c.readError(c.session.reader.ReadBuffer(buffer))
 }
 
@@ -1008,6 +1014,9 @@ func (c *serverReuseConn[U]) InitializeReadWaiter(options N.ReadWaitOptions) (ne
 }
 
 func (c *serverReuseConn[U]) WaitReadBuffer() (*buf.Buffer, error) {
+	if c.readClosed.Load() {
+		return nil, io.EOF
+	}
 	buffer, err := c.session.reader.WaitReadBuffer()
 	return buffer, c.readError(err)
 }
