@@ -481,14 +481,14 @@ func (c *reuseConn) Close() error {
 			c.session.Release(false)
 			return
 		}
+		c.session.Conn.SetReadDeadline(time.Time{})
+		c.session.Conn.SetWriteDeadline(time.Time{})
 		c.closeErr = c.closeWriteLocked()
 		c.access.Unlock()
 		if c.closeErr != nil {
 			c.session.Release(false)
 			return
 		}
-		c.session.Conn.SetReadDeadline(time.Time{})
-		c.session.Conn.SetWriteDeadline(time.Time{})
 		if c.readClosed.Load() {
 			c.session.Release(true)
 			return
