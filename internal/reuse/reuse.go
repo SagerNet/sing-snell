@@ -74,8 +74,8 @@ func (p *Pool[S]) Take() (session S, found bool, closed bool) {
 	var expired []S
 	now := time.Now()
 	if !closed {
-		for element := p.entries.Front(); element != nil; {
-			next := element.Next()
+		for element := p.entries.Back(); element != nil; {
+			next := element.Prev()
 			entry := element.Value
 			state := State(entry.session.ReuseState().Load())
 			if state == StateClosed {
