@@ -837,11 +837,10 @@ func (c *serverReuseConn[U]) writeResponseBuffer(buffer *buf.Buffer) error {
 	return nil
 }
 
-func (c *serverReuseConn[U]) writeErrorResponse() error {
-	message := []byte(remoteEOFMessage)
+func (c *serverReuseConn[U]) writeErrorResponse(code byte, message string) error {
 	reply := make([]byte, 3+len(message))
 	reply[0] = snell.ReplyError
-	reply[1] = remoteEOFCode
+	reply[1] = code
 	reply[2] = byte(len(message))
 	copy(reply[3:], message)
 	var err error
@@ -963,20 +962,34 @@ func (c *serverReuseConn[U]) closeWriteLocked() error {
 	if c.writeClosed {
 		return c.closeWriteErr
 	}
-	c.writeClosed = true
 	// snell-server v6.0.0b4: FUN_001414e0 -> FUN_00140390 reports upstream EOF
 	// before any payload as ReplyError 0x65 "Remote EOF", marks the context
 	// aborted, and FUN_00141390 closes the tunnel after the error data is written.
 	if !c.replyWritten {
-		c.closeWriteErr = c.writeErrorResponse()
-		if c.closeWriteErr == nil {
-			c.aborted.Store(true)
-			c.closeWriteErr = c.session.Conn.Close()
-		}
-		return c.closeWriteErr
+		return c.abortWithErrorLocked(remoteEOFCode, remoteEOFMessage)
 	}
+	c.writeClosed = true
 	c.closeWriteErr = c.session.writer.WriteZeroChunk()
 	return c.closeWriteErr
+}
+
+func (c *serverReuseConn[U]) abortWithErrorLocked(code byte, message string) error {
+	c.writeClosed = true
+	c.closeWriteErr = c.writeErrorResponse(code, message)
+	if c.closeWriteErr == nil {
+		c.aborted.Store(true)
+		c.closeWriteErr = c.session.Conn.Close()
+	}
+	return c.closeWriteErr
+}
+
+func (c *serverReuseConn[U]) HandshakeFailure(err error) error {
+	c.access.Lock()
+	defer c.access.Unlock()
+	if c.writeClosed || c.replyWritten || c.session.transport.Reached() {
+		return nil
+	}
+	return c.abortWithErrorLocked(reuse.ErrorReply(err))
 }
 
 func (c *serverReuseConn[U]) Close() error {
@@ -1076,4 +1089,5 @@ var (
 	_ N.VectorisedWriteCreator = (*serverReuseConn[struct{}])(nil)
 	_ N.VectorisedWriter       = (*serverReuseVectorisedWriter[struct{}])(nil)
 	_ N.WriteCloser            = (*serverReuseConn[struct{}])(nil)
+	_ N.HandshakeFailure       = (*serverReuseConn[struct{}])(nil)
 )

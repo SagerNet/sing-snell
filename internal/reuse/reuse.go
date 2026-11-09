@@ -1,9 +1,11 @@
 package reuse
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	snell "github.com/sagernet/sing-snell"
@@ -23,6 +25,29 @@ const (
 	RemoteEOFCode    = 0x65
 	RemoteEOFMessage = "Remote EOF"
 )
+
+// snell-server v5.0.1: FUN_0013a740 maps libuv errors to reply codes, 0xff for the rest; FUN_0013f020
+// sends it with the uv_strerror message. v6.0.0rc uses the same table.
+func ErrorReply(err error) (code byte, message string) {
+	switch {
+	case errors.Is(err, syscall.EAFNOSUPPORT):
+		return 0x01, "address family not supported"
+	case errors.Is(err, syscall.ENETDOWN):
+		return 0x02, "network is down"
+	case errors.Is(err, syscall.ENETUNREACH):
+		return 0x03, "network is unreachable"
+	case errors.Is(err, syscall.ECONNRESET):
+		return 0x04, "connection reset by peer"
+	case errors.Is(err, syscall.ETIMEDOUT), E.IsTimeout(err):
+		return 0x05, "connection timed out"
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return 0x06, "connection refused"
+	case errors.Is(err, syscall.EHOSTUNREACH):
+		return 0x08, "host is unreachable"
+	default:
+		return 0xff, "Unknown error"
+	}
+}
 
 type State uint8
 
