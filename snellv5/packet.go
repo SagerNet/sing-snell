@@ -11,6 +11,7 @@ import (
 
 	snell "github.com/sagernet/sing-snell"
 	"github.com/sagernet/sing-snell/internal/reuse"
+	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -131,6 +132,10 @@ func (c *serverPacketConn) readRequestPacketDestination(record *buf.Buffer) (M.S
 }
 
 func (c *serverPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
+	if !destination.IsIP() {
+		buffer.Release()
+		return nil
+	}
 	c.writeAccess.Lock()
 	if c.writer == nil {
 		err := c.writeTunnelReply()
@@ -143,11 +148,7 @@ func (c *serverPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksad
 	recordWriter := c.writer
 	c.writeAccess.Unlock()
 	header := buf.With(buffer.ExtendHeader(c.responseAddrLen(destination)))
-	err := snell.WriteUDPResponseAddress(header, destination)
-	if err != nil {
-		buffer.Release()
-		return err
-	}
+	common.Must(snell.WriteUDPResponseAddress(header, destination))
 	if buffer.Len() > maxPayload {
 		buffer.Release()
 		return snell.ErrPayloadTooLarge
@@ -193,15 +194,22 @@ func (w *serverPacketBatchWriter) WritePacketBatch(buffers []*buf.Buffer, destin
 	}
 	recordWriter := w.writer
 	w.access.Unlock()
+	writeIndex := 0
 	for index, buffer := range buffers {
-		header := buf.With(buffer.ExtendHeader(w.conn.responseAddrLen(destinations[index])))
-		err := snell.WriteUDPResponseAddress(header, destinations[index])
-		if err != nil {
-			buf.ReleaseMulti(buffers)
-			return err
+		destination := destinations[index]
+		if !destination.IsIP() {
+			buffer.Release()
+			continue
 		}
+		header := buf.With(buffer.ExtendHeader(w.conn.responseAddrLen(destination)))
+		common.Must(snell.WriteUDPResponseAddress(header, destination))
+		buffers[writeIndex] = buffer
+		writeIndex++
 	}
-	return recordWriter.WriteVectorised(buffers)
+	if writeIndex == 0 {
+		return nil
+	}
+	return recordWriter.WriteVectorised(buffers[:writeIndex])
 }
 
 func (c *serverPacketConn) writeTunnelReply() error {
