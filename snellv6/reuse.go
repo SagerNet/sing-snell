@@ -244,6 +244,9 @@ func (c *reuseConn) Read(p []byte) (int, error) {
 	if c.closed.Load() {
 		return 0, net.ErrClosed
 	}
+	if c.readClosed.Load() {
+		return 0, io.EOF
+	}
 	c.readActionCount.Add(1)
 	defer c.readActionCount.Add(-1)
 	if c.closed.Load() {
@@ -283,6 +286,9 @@ func (c *reuseConn) Read(p []byte) (int, error) {
 func (c *reuseConn) ReadBuffer(buffer *buf.Buffer) error {
 	if c.closed.Load() {
 		return net.ErrClosed
+	}
+	if c.readClosed.Load() {
+		return io.EOF
 	}
 	c.readActionCount.Add(1)
 	defer c.readActionCount.Add(-1)
@@ -538,6 +544,9 @@ func (w *reuseReadWaiter) InitializeReadWaiter(options N.ReadWaitOptions) (needC
 func (w *reuseReadWaiter) WaitReadBuffer() (*buf.Buffer, error) {
 	if w.conn.closed.Load() {
 		return nil, net.ErrClosed
+	}
+	if w.conn.readClosed.Load() {
+		return nil, io.EOF
 	}
 	w.conn.readActionCount.Add(1)
 	defer w.conn.readActionCount.Add(-1)
