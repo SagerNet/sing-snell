@@ -26,9 +26,7 @@ func (c *Client) DialContext(ctx context.Context, destination M.Socksaddr) (net.
 		if err != nil {
 			return nil, err
 		}
-		if snell.KeepSessionFromContext(ctx) {
-			session.keepOnce.Store(true)
-		}
+		session.keepOnce.Store(snell.KeepSessionFromContext(ctx))
 		conn, err := session.DialConn(destination)
 		if err != nil {
 			session.Close()
@@ -157,10 +155,6 @@ func (s *reuseSession) Close() error {
 }
 
 func (s *reuseSession) startDrain() {
-	if s.closeIdle() {
-		s.Close()
-		return
-	}
 	if !s.state.CompareAndSwap(uint32(reuse.StateActive), uint32(reuse.StateWaiting)) {
 		if reuse.State(s.state.Load()) != reuse.StateClosed {
 			s.Close()
