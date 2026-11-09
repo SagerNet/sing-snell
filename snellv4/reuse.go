@@ -10,6 +10,7 @@ import (
 	"time"
 
 	snell "github.com/sagernet/sing-snell"
+	"github.com/sagernet/sing-snell/internal/eof"
 	"github.com/sagernet/sing-snell/internal/reuse"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
@@ -217,7 +218,7 @@ func (c *reuseConn) readResponse() error {
 		return nil
 	}
 	if c.session.reader == nil {
-		c.session.reader = &reader{upstream: c.session.Conn, psk: c.session.client.psk}
+		c.session.reader = &reader{upstream: eof.UnexpectedReader{Reader: c.session.Conn}, psk: c.session.client.psk}
 		c.session.reader.InitializeReadWaiter(c.readWaitOptions)
 	}
 	record, err := c.session.reader.ReadRecord()

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	snell "github.com/sagernet/sing-snell"
+	"github.com/sagernet/sing-snell/internal/eof"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -417,7 +418,7 @@ func (r *shapedReader) read() (*buf.Buffer, error) {
 			_, err = discard.ReadFullFrom(r.upstream, paddingLen)
 			discard.Release()
 			if err != nil {
-				return nil, err
+				return nil, eof.Unexpected(err)
 			}
 		}
 		return nil, io.EOF
@@ -429,7 +430,7 @@ func (r *shapedReader) read() (*buf.Buffer, error) {
 		_, err = padding.ReadFullFrom(r.upstream, paddingLen)
 		if err != nil {
 			padding.Release()
-			return nil, err
+			return nil, eof.Unexpected(err)
 		}
 	}
 	body := r.readWaitOptions.NewBufferSize(payloadLen + snell.AEADTagLen)
@@ -439,7 +440,7 @@ func (r *shapedReader) read() (*buf.Buffer, error) {
 			padding.Release()
 		}
 		body.Release()
-		return nil, err
+		return nil, eof.Unexpected(err)
 	}
 	var paddingBytes []byte
 	if padding != nil {

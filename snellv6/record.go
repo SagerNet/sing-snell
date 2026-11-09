@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	snell "github.com/sagernet/sing-snell"
+	"github.com/sagernet/sing-snell/internal/eof"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
@@ -178,7 +179,7 @@ func (r *unshapedReader) read() (*buf.Buffer, error) {
 	_, err = body.ReadFullFrom(r.upstream, payloadLen+snell.AEADTagLen)
 	if err != nil {
 		body.Release()
-		return nil, err
+		return nil, eof.Unexpected(err)
 	}
 	_, err = r.cipher.Open(body.Index(0), r.nonce, body.Bytes(), nil)
 	if err != nil {
@@ -440,7 +441,7 @@ func (r *rawReader) read() (*buf.Buffer, error) {
 	_, err = body.ReadFullFrom(r.upstream, payloadLen)
 	if err != nil {
 		body.Release()
-		return nil, err
+		return nil, eof.Unexpected(err)
 	}
 	r.readWaitOptions.PostReturn(body)
 	return body, nil

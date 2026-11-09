@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	snell "github.com/sagernet/sing-snell"
+	"github.com/sagernet/sing-snell/internal/eof"
 	"github.com/sagernet/sing-snell/internal/reuse"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
@@ -153,7 +154,7 @@ func (c *clientConn) readResponse() error {
 	if c.reader != nil {
 		return nil
 	}
-	reader, record, err := readFirstRecord(c.Conn, c.client.mode, c.client.psk, c.client.profile, c.readWaitOptions)
+	reader, record, err := readFirstRecord(eof.UnexpectedReader{Reader: c.Conn}, c.client.mode, c.client.psk, c.client.profile, c.readWaitOptions)
 	if err != nil {
 		return E.Cause(err, "read reply")
 	}

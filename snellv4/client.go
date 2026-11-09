@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	snell "github.com/sagernet/sing-snell"
+	"github.com/sagernet/sing-snell/internal/eof"
 	"github.com/sagernet/sing-snell/internal/reuse"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/buf"
@@ -143,7 +144,7 @@ func (c *clientConn) readResponse() error {
 	if c.reader != nil {
 		return nil
 	}
-	recordReader := &reader{upstream: c.Conn, psk: c.client.psk}
+	recordReader := &reader{upstream: eof.UnexpectedReader{Reader: c.Conn}, psk: c.client.psk}
 	recordReader.InitializeReadWaiter(c.readWaitOptions)
 	record, err := recordReader.ReadRecord()
 	if err != nil {
