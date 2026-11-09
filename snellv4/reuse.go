@@ -101,7 +101,8 @@ func (c *Client) Close() error {
 
 type reuseSession struct {
 	net.Conn
-	client *Client
+	transport *reuse.Conn
+	client    *Client
 
 	state    atomic.Uint32
 	keepOnce atomic.Bool
@@ -110,7 +111,8 @@ type reuseSession struct {
 }
 
 func (c *Client) newReuseSession(conn net.Conn) *reuseSession {
-	return &reuseSession{Conn: c.obfs.ClientConn(conn), client: c}
+	transport := &reuse.Conn{Conn: conn}
+	return &reuseSession{Conn: c.obfs.ClientConn(transport), transport: transport, client: c}
 }
 
 func (s *reuseSession) ReuseState() *atomic.Uint32 {
@@ -138,7 +140,7 @@ func (s *reuseSession) Release(reusable bool) {
 		s.Close()
 		return
 	}
-	if !s.state.CompareAndSwap(uint32(reuse.StateActive), uint32(reuse.StateReady)) {
+	if !s.transport.Ready(&s.state, reuse.StateActive) {
 		if reuse.State(s.state.Load()) != reuse.StateClosed {
 			s.Close()
 		}
@@ -177,7 +179,7 @@ func (s *reuseSession) drain() {
 	for {
 		record, err := s.reader.NextRecord()
 		if errors.Is(err, io.EOF) {
-			s.state.CompareAndSwap(uint32(reuse.StateWaiting), uint32(reuse.StateReady))
+			s.transport.Ready(&s.state, reuse.StateWaiting)
 			return
 		}
 		if err != nil {
@@ -259,7 +261,7 @@ func (c *reuseConn) Read(p []byte) (int, error) {
 			discarded += n
 			if errors.Is(err, io.EOF) {
 				c.readClosed.Store(true)
-				c.session.state.CompareAndSwap(uint32(reuse.StateWaiting), uint32(reuse.StateReady))
+				c.session.transport.Ready(&c.session.state, reuse.StateWaiting)
 				return 0, err
 			}
 			if err != nil {
@@ -304,7 +306,7 @@ func (c *reuseConn) ReadBuffer(buffer *buf.Buffer) error {
 			buffer.Truncate(bufferLen)
 			if errors.Is(err, io.EOF) {
 				c.readClosed.Store(true)
-				c.session.state.CompareAndSwap(uint32(reuse.StateWaiting), uint32(reuse.StateReady))
+				c.session.transport.Ready(&c.session.state, reuse.StateWaiting)
 				return err
 			}
 			if err != nil {
@@ -501,7 +503,7 @@ func (c *reuseConn) Close() error {
 			}
 			poolState := reuse.StateWaiting
 			if c.readClosed.Load() {
-				c.session.state.CompareAndSwap(uint32(reuse.StateWaiting), uint32(reuse.StateReady))
+				c.session.transport.Ready(&c.session.state, reuse.StateWaiting)
 				poolState = reuse.StateReady
 			}
 			if !c.session.client.pool.MoveToPool(c.session, poolState, false) {
@@ -556,7 +558,7 @@ func (w *reuseReadWaiter) WaitReadBuffer() (*buf.Buffer, error) {
 			}
 			if errors.Is(err, io.EOF) {
 				w.conn.readClosed.Store(true)
-				w.conn.session.state.CompareAndSwap(uint32(reuse.StateWaiting), uint32(reuse.StateReady))
+				w.conn.session.transport.Ready(&w.conn.session.state, reuse.StateWaiting)
 				return nil, err
 			}
 			if err != nil {
