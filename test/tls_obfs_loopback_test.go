@@ -360,7 +360,11 @@ func (h *closeWhileReadActiveHandler) NewConnectionEx(ctx context.Context, conn 
 			readDone <- readErr
 		}()
 		time.Sleep(100 * time.Millisecond)
-		err = conn.Close()
+		err = N.CloseWrite(conn)
+		closeErr := conn.Close()
+		if err == nil {
+			err = closeErr
+		}
 		close(h.closeDone)
 		readErr := <-readDone
 		if err == nil {
@@ -378,6 +382,10 @@ func (h partialEchoHandler) NewConnectionEx(ctx context.Context, conn net.Conn, 
 		_, err := io.ReadFull(conn, payload)
 		if err == nil {
 			_, err = conn.Write(payload)
+		}
+		closeWriteErr := N.CloseWrite(conn)
+		if err == nil {
+			err = closeWriteErr
 		}
 		closeErr := conn.Close()
 		if err == nil {

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	snell "github.com/sagernet/sing-snell"
+	"github.com/sagernet/sing-snell/internal/eof"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/buf"
@@ -273,7 +274,8 @@ func (s *Service) newConnection(ctx context.Context, conn net.Conn, source M.Soc
 	if err != nil {
 		return err
 	}
-	r := newReader(conn, aead, make([]byte, snell.NonceLen))
+	transport := &eof.TrackingReader{Reader: conn}
+	r := newReader(transport, aead, make([]byte, snell.NonceLen))
 	record, err := r.ReadRecord()
 	if err != nil {
 		return E.Cause(err, "read request")
@@ -301,7 +303,7 @@ func (s *Service) newConnection(ctx context.Context, conn net.Conn, source M.Soc
 		s.handler.NewConnectionEx(ctx, serverConn, source, request.Destination, onClose)
 		return nil
 	case snell.CommandConnectV2:
-		reuseSession := &serverReuseSession[struct{}]{Conn: conn, service: s, reader: r}
+		reuseSession := &serverReuseSession[struct{}]{Conn: conn, service: s, transport: transport, reader: r}
 		return reuseSession.Serve(ctx, source, onClose, record, request)
 	case snell.CommandUDP:
 		record.Release()
@@ -347,7 +349,8 @@ func (s *MultiService[U]) newConnection(ctx context.Context, conn net.Conn, sour
 	if err != nil {
 		return err
 	}
-	r := newReader(conn, aead, make([]byte, snell.NonceLen))
+	transport := &eof.TrackingReader{Reader: conn}
+	r := newReader(transport, aead, make([]byte, snell.NonceLen))
 	record, err := r.ReadRecord()
 	if err != nil {
 		return E.Cause(err, "read request")
@@ -380,7 +383,7 @@ func (s *MultiService[U]) newConnection(ctx context.Context, conn net.Conn, sour
 		s.handler.NewConnectionEx(requestCtx, serverConn, source, request.Destination, onClose)
 		return nil
 	case snell.CommandConnectV2:
-		reuseSession := &serverReuseSession[U]{Conn: conn, service: s.Service, multiService: s, reader: r}
+		reuseSession := &serverReuseSession[U]{Conn: conn, service: s.Service, multiService: s, transport: transport, reader: r}
 		return reuseSession.Serve(ctx, source, onClose, record, request)
 	case snell.CommandUDP:
 		requestCtx, err := s.authenticate(ctx, request)

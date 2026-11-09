@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	snell "github.com/sagernet/sing-snell"
+	"github.com/sagernet/sing-snell/internal/eof"
 	"github.com/sagernet/sing-snell/internal/reuse"
 	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/buf"
@@ -149,7 +150,8 @@ func (s *Service) readRequest(record *buf.Buffer) (snell.Request, error) {
 }
 
 func (s *Service) newConnection(ctx context.Context, conn net.Conn, source M.Socksaddr, onClose N.CloseHandlerFunc) error {
-	reader, record, err := readFirstRecord(conn, s.mode, s.psk, s.profile, N.ReadWaitOptions{})
+	transport := &eof.TrackingReader{Reader: conn}
+	reader, record, err := readFirstRecord(transport, s.mode, s.psk, s.profile, N.ReadWaitOptions{})
 	if err != nil {
 		return E.Cause(err, "read request")
 	}
@@ -170,7 +172,7 @@ func (s *Service) newConnection(ctx context.Context, conn net.Conn, source M.Soc
 		s.handler.NewConnectionEx(ctx, serverConn, source, request.Destination, onClose)
 		return nil
 	case snell.CommandConnectV2:
-		reuseSession := &serverReuseSession[struct{}]{Conn: conn, service: s, reader: reader}
+		reuseSession := &serverReuseSession[struct{}]{Conn: conn, service: s, transport: transport, reader: reader}
 		return reuseSession.Serve(ctx, source, onClose, record, request)
 	case snell.CommandUDP:
 		// snell-server v6.0.0b4: FUN_00141bc0 rejects UDP tunnel requests when the
@@ -213,7 +215,8 @@ func (s *Service) newPacketConnection(ctx context.Context, packetConn *serverPac
 }
 
 func (s *MultiService[U]) newConnection(ctx context.Context, conn net.Conn, source M.Socksaddr, onClose N.CloseHandlerFunc) error {
-	reader, record, err := readFirstRecord(conn, s.mode, s.psk, s.profile, N.ReadWaitOptions{})
+	transport := &eof.TrackingReader{Reader: conn}
+	reader, record, err := readFirstRecord(transport, s.mode, s.psk, s.profile, N.ReadWaitOptions{})
 	if err != nil {
 		return E.Cause(err, "read request")
 	}
@@ -239,7 +242,7 @@ func (s *MultiService[U]) newConnection(ctx context.Context, conn net.Conn, sour
 		s.handler.NewConnectionEx(requestCtx, serverConn, source, request.Destination, onClose)
 		return nil
 	case snell.CommandConnectV2:
-		reuseSession := &serverReuseSession[U]{Conn: conn, service: s.Service, multiService: s, reader: reader}
+		reuseSession := &serverReuseSession[U]{Conn: conn, service: s.Service, multiService: s, transport: transport, reader: reader}
 		return reuseSession.Serve(ctx, source, onClose, record, request)
 	case snell.CommandUDP:
 		requestCtx, err := s.authenticate(ctx, request)
