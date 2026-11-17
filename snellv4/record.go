@@ -738,15 +738,7 @@ func (w *writer) WritePacketBuffer(buffer *buf.Buffer) error {
 	// Surge 6.10.0 (12500): -[SGUDPConnectorSnellV4 prepareEncryptContext] enables
 	// datagram mode, in which SNConnectorEngineAdapterV4::encryptData:outData:
 	// skips the growth window and seals each datagram as one record.
-	paddingLen := w.framePaddingLen(dataLen)
-	frontHeadroom := snell.HeaderCipherLen + paddingLen
-	if !w.saltSent {
-		frontHeadroom += snell.SaltLen
-	}
-	if buffer.Start() < frontHeadroom || buffer.FreeLen() < snell.AEADTagLen {
-		return w.writeSliceRecordLocked(buffer.Bytes(), paddingLen)
-	}
-	return w.writeBufferRecordLocked(buffer, paddingLen)
+	return w.writeBufferRecordLocked(buffer, w.framePaddingLen(dataLen))
 }
 
 func (w *writer) FrontHeadroom() int {
