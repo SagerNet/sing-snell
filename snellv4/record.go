@@ -307,48 +307,49 @@ func (w *writer) framePaddingLen(payloadLen int) int {
 	return w.initialPaddingLen
 }
 
-func (w *writer) writeBytesLocked(p []byte) (n int, err error) {
-	err = w.initialize()
+func (w *writer) writeBytesLocked(p []byte) error {
+	err := w.initialize()
 	if err != nil {
-		return 0, err
+		return err
 	}
 	// Surge 6.7.0 (11520): SNConnectorEngineAdapterV4::encryptData:outData: updates the next payload limit once for
 	// each encryptData call, then splits that call using the same limit.
-	payloadLimit := w.nextPayloadLimit()
-	for len(p) > 0 {
-		dataLen := min(len(p), payloadLimit)
-		paddingLen := w.framePaddingLen(dataLen)
-		err = w.writeSliceRecordLocked(p[:dataLen], paddingLen)
-		if err != nil {
-			return n, err
-		}
-		n += dataLen
-		p = p[dataLen:]
+	record, err := w.makeSliceRecordLocked(p, w.nextPayloadLimit())
+	if err != nil {
+		return err
 	}
-	return n, nil
+	return w.writeRecordLocked(record)
 }
 
-func (w *writer) makeSliceRecordLocked(payload []byte, paddingLen int) (*buf.Buffer, error) {
-	err := w.initialize()
-	if err != nil {
-		return nil, err
+func (w *writer) makeSliceRecordLocked(data []byte, payloadLimit int) (*buf.Buffer, error) {
+	recordCount := max((len(data)+payloadLimit-1)/payloadLimit, 1)
+	outLen := len(data) + recordCount*(snell.HeaderCipherLen+snell.AEADTagLen)
+	if !w.saltSent {
+		outLen += snell.SaltLen + w.initialPaddingLen
 	}
+	out := buf.NewSize(outLen)
+	for {
+		recordLen := min(len(data), payloadLimit)
+		err := w.sealRecordLocked(out, data[:recordLen], w.framePaddingLen(recordLen))
+		if err != nil {
+			out.Release()
+			return nil, err
+		}
+		data = data[recordLen:]
+		if len(data) == 0 {
+			return out, nil
+		}
+	}
+}
+
+func (w *writer) sealRecordLocked(out *buf.Buffer, payload []byte, paddingLen int) error {
 	if len(payload) > maxPayload || paddingLen > maxPayload {
 		panic("snell: v4 record exceeds maximum")
 	}
 	if len(payload) == 0 && paddingLen != 0 {
 		panic("snell: zero-length v4 record carries padding")
 	}
-	saltLen := 0
 	if !w.saltSent {
-		saltLen = snell.SaltLen
-	}
-	payloadCipherLen := 0
-	if len(payload) > 0 {
-		payloadCipherLen = len(payload) + snell.AEADTagLen
-	}
-	out := buf.NewSize(saltLen + snell.HeaderCipherLen + paddingLen + payloadCipherLen)
-	if saltLen > 0 {
 		common.Must1(out.Write(w.salt))
 		w.saltSent = true
 	}
@@ -362,15 +363,14 @@ func (w *writer) makeSliceRecordLocked(payload []byte, paddingLen int) (*buf.Buf
 	snell.IncreaseNonce(w.nonce)
 	padding := out.Extend(paddingLen)
 	if len(payload) > 0 {
-		payloadCipher := out.Extend(payloadCipherLen)
+		payloadCipher := out.Extend(len(payload) + snell.AEADTagLen)
 		copy(payloadCipher, payload)
 		w.cipher.Seal(payloadCipher[:0], w.nonce, payloadCipher[:len(payload)], nil)
 		snell.IncreaseNonce(w.nonce)
 		if paddingLen > 0 {
-			err = w.fillPadding(padding, payloadCipher)
+			err := w.fillPadding(padding, payloadCipher)
 			if err != nil {
-				out.Release()
-				return nil, err
+				return err
 			}
 			limit := min(len(padding), len(payloadCipher))
 			for index := 0; index < limit; index += 2 {
@@ -378,15 +378,7 @@ func (w *writer) makeSliceRecordLocked(payload []byte, paddingLen int) (*buf.Buf
 			}
 		}
 	}
-	return out, nil
-}
-
-func (w *writer) writeSliceRecordLocked(payload []byte, paddingLen int) error {
-	out, err := w.makeSliceRecordLocked(payload, paddingLen)
-	if err != nil {
-		return err
-	}
-	return w.writeRecordLocked(out)
+	return nil
 }
 
 func (w *writer) writeRecordLocked(record *buf.Buffer) error {
@@ -547,20 +539,19 @@ func (w *writer) Write(p []byte) (n int, err error) {
 	}
 	w.access.Lock()
 	defer w.access.Unlock()
-	return w.writeBytesLocked(p)
+	err = w.writeBytesLocked(p)
+	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func (w *writer) WriteZeroChunk() error {
 	w.access.Lock()
 	defer w.access.Unlock()
-	err := w.initialize()
-	if err != nil {
-		return err
-	}
 	// Surge 6.7.0 (11520): FUN_100012944 advances the growth window before
 	// calling FUN_100012b24 even when encrypting a zero-length EOF record.
-	w.nextPayloadLimit()
-	return w.writeSliceRecordLocked(nil, 0)
+	return w.writeBytesLocked(nil)
 }
 
 func (w *writer) WriteBuffer(buffer *buf.Buffer) error {
@@ -581,8 +572,7 @@ func (w *writer) WriteBuffer(buffer *buf.Buffer) error {
 		panic("snell: invalid v4 payload limit")
 	}
 	if dataLen > payloadLimit {
-		_, err = w.writeBytesLocked(buffer.Bytes())
-		return err
+		return w.writeBytesLocked(buffer.Bytes())
 	}
 	w.advancePayloadLimit(payloadLimit, nowUnix)
 	paddingLen := w.framePaddingLen(dataLen)
