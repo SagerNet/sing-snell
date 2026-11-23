@@ -237,16 +237,6 @@ func (w *unshapedWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-func (w *unshapedWriter) makeSliceRecordLocked(payload []byte) *buf.Buffer {
-	record := buf.NewSize(snell.HeaderCipherLen + len(payload) + snell.AEADTagLen)
-	w.sealHeader(record.Extend(snell.HeaderCipherLen), len(payload))
-	common.Must1(record.Write(payload))
-	w.cipher.Seal(record.From(snell.HeaderCipherLen)[:0], w.nonce, record.From(snell.HeaderCipherLen), nil)
-	record.Extend(snell.AEADTagLen)
-	snell.IncreaseNonce(w.nonce)
-	return record
-}
-
 func (w *unshapedWriter) makeBufferRecordLocked(buffer *buf.Buffer) *buf.Buffer {
 	dataLen := buffer.Len()
 	header := buffer.ExtendHeader(snell.HeaderCipherLen)
@@ -312,20 +302,21 @@ func (w *vectorisedUnshapedWriter) WriteVectorised(buffers []*buf.Buffer) error 
 			buffer.Release()
 			continue
 		}
+		if dataLen <= maxPayload {
+			records = append(records, recordWriter.makeBufferRecordLocked(buffer))
+			continue
+		}
+		frontHeadroom := N.CalculateFrontHeadroom(recordWriter)
+		rearHeadroom := N.CalculateRearHeadroom(recordWriter)
 		for data := buffer.Bytes(); len(data) > 0; {
-			if len(data) == dataLen && dataLen <= maxPayload {
-				record := recordWriter.makeBufferRecordLocked(buffer)
-				buffer = nil
-				records = append(records, record)
-				break
-			}
 			recordLen := min(len(data), maxPayload)
-			records = append(records, recordWriter.makeSliceRecordLocked(data[:recordLen]))
+			chunk := buf.NewSize(frontHeadroom + recordLen + rearHeadroom)
+			chunk.Resize(frontHeadroom, 0)
+			common.Must1(chunk.Write(data[:recordLen]))
+			records = append(records, recordWriter.makeBufferRecordLocked(chunk))
 			data = data[recordLen:]
 		}
-		if buffer != nil {
-			buffer.Release()
-		}
+		buffer.Release()
 	}
 	if len(records) == 0 {
 		return nil
@@ -477,13 +468,6 @@ func (w *rawWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-func (w *rawWriter) makeSliceRecordLocked(payload []byte) *buf.Buffer {
-	record := buf.NewSize(snell.HeaderPlainLen + len(payload))
-	putHeader(record.Extend(snell.HeaderPlainLen), 0, len(payload))
-	common.Must1(record.Write(payload))
-	return record
-}
-
 func (w *rawWriter) makeBufferRecordLocked(buffer *buf.Buffer) *buf.Buffer {
 	dataLen := buffer.Len()
 	putHeader(buffer.ExtendHeader(snell.HeaderPlainLen), 0, dataLen)
@@ -544,20 +528,21 @@ func (w *vectorisedRawWriter) WriteVectorised(buffers []*buf.Buffer) error {
 			buffer.Release()
 			continue
 		}
+		if dataLen <= maxPayload {
+			records = append(records, recordWriter.makeBufferRecordLocked(buffer))
+			continue
+		}
+		frontHeadroom := N.CalculateFrontHeadroom(recordWriter)
+		rearHeadroom := N.CalculateRearHeadroom(recordWriter)
 		for data := buffer.Bytes(); len(data) > 0; {
-			if len(data) == dataLen && dataLen <= maxPayload {
-				record := recordWriter.makeBufferRecordLocked(buffer)
-				buffer = nil
-				records = append(records, record)
-				break
-			}
 			recordLen := min(len(data), maxPayload)
-			records = append(records, recordWriter.makeSliceRecordLocked(data[:recordLen]))
+			chunk := buf.NewSize(frontHeadroom + recordLen + rearHeadroom)
+			chunk.Resize(frontHeadroom, 0)
+			common.Must1(chunk.Write(data[:recordLen]))
+			records = append(records, recordWriter.makeBufferRecordLocked(chunk))
 			data = data[recordLen:]
 		}
-		if buffer != nil {
-			buffer.Release()
-		}
+		buffer.Release()
 	}
 	if len(records) == 0 {
 		return nil

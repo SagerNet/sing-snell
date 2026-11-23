@@ -399,16 +399,6 @@ func (w *writer) sealRecordLocked(output *buf.Buffer, payload []byte, paddingLen
 	return nil
 }
 
-func (w *writer) makeSliceRecordLocked(payload []byte, paddingLen int) (*buf.Buffer, error) {
-	record := buf.NewSize(snell.HeaderCipherLen + paddingLen + len(payload) + snell.AEADTagLen)
-	err := w.sealRecordLocked(record, payload, paddingLen)
-	if err != nil {
-		record.Release()
-		return nil, err
-	}
-	return record, nil
-}
-
 func (w *writer) makeBufferRecordLocked(buffer *buf.Buffer, paddingLen int) (*buf.Buffer, error) {
 	dataLen := buffer.Len()
 	if dataLen > maxPayload || paddingLen > maxPayload {
@@ -621,23 +611,28 @@ func (w *vectorisedWriter) WriteVectorised(buffers []*buf.Buffer) error {
 			buffer.Release()
 			continue
 		}
-		for data := buffer.Bytes(); len(data) > 0; {
-			payloadLimit, batchLen := recordWriter.nextStreamPayloadBatch(len(data))
-			if len(data) == dataLen && batchLen == dataLen && dataLen <= payloadLimit {
-				record, err := recordWriter.makeBufferRecordLocked(buffer, 0)
-				if err != nil {
-					buffer.Release()
-					buf.ReleaseMulti(buffers[index+1:])
-					return err
-				}
-				buffer = nil
-				records = append(records, record)
-				break
+		payloadLimit, batchLen := recordWriter.nextStreamPayloadBatch(dataLen)
+		if batchLen == dataLen && dataLen <= payloadLimit {
+			record, err := recordWriter.makeBufferRecordLocked(buffer, 0)
+			if err != nil {
+				buffer.Release()
+				buf.ReleaseMulti(buffers[index+1:])
+				return err
 			}
+			records = append(records, record)
+			continue
+		}
+		frontHeadroom := N.CalculateFrontHeadroom(recordWriter)
+		rearHeadroom := N.CalculateRearHeadroom(recordWriter)
+		for data := buffer.Bytes(); ; {
 			for batch := data[:batchLen]; len(batch) > 0; {
 				recordLen := min(len(batch), payloadLimit)
-				record, err := recordWriter.makeSliceRecordLocked(batch[:recordLen], 0)
+				chunk := buf.NewSize(frontHeadroom + recordLen + rearHeadroom)
+				chunk.Resize(frontHeadroom, 0)
+				common.Must1(chunk.Write(batch[:recordLen]))
+				record, err := recordWriter.makeBufferRecordLocked(chunk, 0)
 				if err != nil {
+					chunk.Release()
 					buffer.Release()
 					buf.ReleaseMulti(buffers[index+1:])
 					return err
@@ -646,10 +641,12 @@ func (w *vectorisedWriter) WriteVectorised(buffers []*buf.Buffer) error {
 				batch = batch[recordLen:]
 			}
 			data = data[batchLen:]
+			if len(data) == 0 {
+				break
+			}
+			payloadLimit, batchLen = recordWriter.nextStreamPayloadBatch(len(data))
 		}
-		if buffer != nil {
-			buffer.Release()
-		}
+		buffer.Release()
 	}
 	if len(records) == 0 {
 		return nil

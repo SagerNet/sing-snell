@@ -632,33 +632,34 @@ func (w *vectorisedWriter) WriteVectorised(buffers []*buf.Buffer) error {
 			payloadLimit = recordWriter.nextPayloadLimit()
 		}
 		dataLen := buffer.Len()
+		if dataLen <= payloadLimit {
+			record, err := recordWriter.makeBufferRecordLocked(buffer, recordWriter.framePaddingLen(dataLen))
+			if err != nil {
+				buffer.Release()
+				buf.ReleaseMulti(buffers[index+1:])
+				return err
+			}
+			records = append(records, record)
+			continue
+		}
+		frontHeadroom := N.CalculateFrontHeadroom(recordWriter)
+		rearHeadroom := N.CalculateRearHeadroom(recordWriter)
 		for data := buffer.Bytes(); len(data) > 0; {
 			recordLen := min(len(data), payloadLimit)
-			paddingLen := recordWriter.framePaddingLen(recordLen)
-			var record *buf.Buffer
-			var err error
-			if len(data) == dataLen && dataLen <= payloadLimit {
-				record, err = recordWriter.makeBufferRecordLocked(buffer, paddingLen)
-				if err != nil {
-					buffer.Release()
-					buf.ReleaseMulti(buffers[index+1:])
-					return err
-				}
-				buffer = nil
-			} else {
-				record, err = recordWriter.makeSliceRecordLocked(data[:recordLen], paddingLen)
-				if err != nil {
-					buffer.Release()
-					buf.ReleaseMulti(buffers[index+1:])
-					return err
-				}
+			chunk := buf.NewSize(frontHeadroom + recordLen + rearHeadroom)
+			chunk.Resize(frontHeadroom, 0)
+			common.Must1(chunk.Write(data[:recordLen]))
+			record, err := recordWriter.makeBufferRecordLocked(chunk, recordWriter.framePaddingLen(recordLen))
+			if err != nil {
+				chunk.Release()
+				buffer.Release()
+				buf.ReleaseMulti(buffers[index+1:])
+				return err
 			}
-			data = data[recordLen:]
 			records = append(records, record)
+			data = data[recordLen:]
 		}
-		if buffer != nil {
-			buffer.Release()
-		}
+		buffer.Release()
 	}
 	if len(records) == 0 {
 		return nil
