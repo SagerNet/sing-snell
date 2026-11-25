@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/opencontainers/image-spec v1.1.1
-	github.com/sagernet/sing v0.8.12-0.20260727003324-d096a164bc7f
+	github.com/sagernet/sing v0.9.7-0.20261124055526-8badbba80825
 	github.com/sagernet/sing-snell v0.0.0
 	github.com/stretchr/testify v1.11.1
 )
@@ -39,7 +39,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/otel/trace v1.44.0 // indirect
 	golang.org/x/crypto v0.42.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
